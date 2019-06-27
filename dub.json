@@ -1,0 +1,16 @@
+{
+	"name": "ensure",
+    "description": "Fluent guards to aid in ensuring the correctness of function/method arguments.",
+    "copyright": "Copyright © 2019, Tony J. Hudgins",
+    "homepage": "https://github.com/SirTony/ensure",
+    "license": "MIT",
+
+	"authors": [
+		"Tony J. Hudgins"
+    ],
+
+    "targetName": "ensure",
+    "targetType": "library",
+    "targetPath": "bin",
+    "sourcePath": "src"
+}
