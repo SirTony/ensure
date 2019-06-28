@@ -1,5 +1,5 @@
 /**
-Provides some convenience functionality for parsing command-line arguments by piggy-backing off std.getopt.
+Provides functionality for validating function arguments.
 
 Authors: Tony J. Hudgins
 Copyright: Copyright © 2019, Tony J. Hudgins
@@ -8,6 +8,7 @@ License: MIT
 module ensure;
 
 import std.traits;
+import std.typecons : Nullable, NullableRef;
 import std.range : isInputRange, hasLength;
 import std.format : format;
 
@@ -19,6 +20,33 @@ private enum isValidRangeSpecifier( string spec ) =
 
 private enum supportsOperation( T, string op ) =
     is( typeof( { bool _ = mixin( "T.init " ~ op ~ " T.init" ); } ) );
+
+version( unittest )
+{
+    private
+    {
+        void mustThrow( E: Throwable, F )( F f )
+        {
+            try
+            {
+                f();
+                assert( false, "expression was supposed to throw but it didn't" );
+            } catch( E ) { }
+        }
+
+        void mustNotThrow( E: Throwable, F )( F f )
+        {
+            try
+            {
+                f();
+            }
+            catch( E )
+            {
+                assert( false, "expression wasn't supposed to throw but it did (threw " ~ E.stringof ~ ")" );
+            }
+        }
+    }
+}
 
 /++
 A convenience wrapper for __traits( identifier, ... ).
@@ -53,7 +81,7 @@ enum nameof( alias symbol ) = __traits( identifier, symbol );
 }
 
 /++
-Tests if a type can null. Not related to std.typecons.Nullable!T.
+Tests if a type can be null. Not related to std.typecons.Nullable!T.
 
 Authors: Tony J. Hudgins
 Copyright: Copyright © 2019, Tony J. Hudgins
@@ -83,6 +111,20 @@ final class EnsureException : Exception
         return this._paramName;
     }
 
+    /++
+    Constructs a new EnsureException for a given parameter with a custom message.
+
+    Params:
+        paramName = The name of the parameter being validated.
+        msg = The message to pass to the exception's constructor.
+        file = Used for passing the appropriate file name to the exception's constructor.
+        line = Used for passing the appropriate line number to the exception's constructor.
+        next = The next throwable object in the chain.
+
+    Authors: Tony J. Hudgins
+    Copyright: Copyright © 2019, Tony J. Hudgins
+    License: MIT
+    +/
     this( string paramName, string msg, string file = __FILE__, size_t line = __LINE__, Throwable next = null )
     {
         this._paramName = paramName;
@@ -105,12 +147,12 @@ struct Arg( T )
         T _value;
     }
 
-    string paramName() const pure nothrow @trusted @property
+    inout( string ) paramName() inout pure nothrow @trusted @property
     {
         return this._paramName;
     }
 
-    T value() const pure nothrow @trusted @property
+    inout( T ) value() inout pure nothrow @trusted @property
     {
         return this._value;
     }
@@ -167,7 +209,7 @@ Authors: Tony J. Hudgins
 Copyright: Copyright © 2019, Tony J. Hudgins
 License: MIT
 +/
-Arg!T isNotNull( T )( Arg!T arg ) //if( isNullable!T )
+Arg!T isNotNull( T )( Arg!T arg ) if( isNullable!T )
 {
     if( arg.value is null )
         arg.throwWith( "argument cannot be null" );
@@ -175,8 +217,18 @@ Arg!T isNotNull( T )( Arg!T arg ) //if( isNullable!T )
     return arg;
 }
 
+@system unittest
+{
+    string a = null;
+    string b = "";
+
+    mustThrow!EnsureException( { ensure!a.isNotNull; } );
+
+    ensure!b.isNotNull;
+}
+
 /++
-Ensures that an array is not empty.
+Ensures that the std.typecons.Nullable is not in a null state.
 
 Params:
     arg = A wrapped argument, obtained with ensure.
@@ -187,23 +239,27 @@ Authors: Tony J. Hudgins
 Copyright: Copyright © 2019, Tony J. Hudgins
 License: MIT
 +/
-Arg!T isNotEmpty( T )( Arg!T arg ) if( isArray!T )
+Arg!T isNotNull( T: Nullable!U, U )( Arg!T arg )
 {
-    static if( isSomeString!T )
-        enum kind = "string";
-    else static if( isAssociativeArray!T )
-        enum kind = "associative array";
-    else
-        enum kind = "array";
-
-    if( arg.value.length == 0 )
-        arg.throwWith( kind ~ " cannot be empty" );
+    if( arg.value.isNull )
+        arg.throwWith( "nullable cannot be null" );
 
     return arg;
 }
 
+@system unittest
+{
+    import std.typecons : Nullable, nullable;
+
+    Nullable!int a;
+    auto b = nullable( 5 );
+
+    mustThrow!EnsureException( { ensure!a.isNotNull; } );
+    ensure!b.isNotNull;
+}
+
 /++
-Ensures that a range is not empty.
+Ensures that the std.typecons.NullableRef is not in a null state.
 
 Params:
     arg = A wrapped argument, obtained with ensure.
@@ -214,12 +270,93 @@ Authors: Tony J. Hudgins
 Copyright: Copyright © 2019, Tony J. Hudgins
 License: MIT
 +/
-Arg!T isNotEmpty( T )( Arg!T arg ) if( !isArray!T && isInputRange!T )
+Arg!T isNotNull( T: NullableRef!U, U )( Arg!T arg )
 {
-    if( arg.value.empty )
-        arg.throwWith( "range cannot be empty" );
+    if( arg.value.isNull )
+        arg.throwWith( "nullable cannot be null" );
 
     return arg;
+}
+
+@system unittest
+{
+    import std.typecons : NullableRef, nullableRef;
+
+    int naked = 5;
+
+    NullableRef!int a;
+    auto b = nullableRef( &naked );
+
+    mustThrow!EnsureException( { ensure!a.isNotNull; } );
+
+    ensure!b.isNotNull;
+}
+
+/++
+Ensures that an array, associative array, string, or input range is not empty.
+
+Params:
+    arg = A wrapped argument, obtained with ensure.
+
+See_Also: ensure
+Throws: EnsureException when validation fails.
+Authors: Tony J. Hudgins
+Copyright: Copyright © 2019, Tony J. Hudgins
+License: MIT
++/
+Arg!T isNotEmpty( T )( Arg!T arg ) if( isInputRange!T || isSomeString!T || isArray!T || isAssociativeArray!T )
+{
+    static if( isInputRange!T )
+        enum kind = "range";
+    else static if( isSomeString!T )
+        enum kind = "string";
+    else static if( isArray!T )
+        enum kind = "array";
+    else static if( isAssociativeArray!T )
+        enum kind = "associative array";
+    else
+        static assert( false, "unsupported type for isNotEmpty: " ~ T.stringof );
+
+    static if( isInputRange!T && !isSomeString!T && !isArray!T )
+    {
+        if( arg.value.empty )
+            arg.throwWith( kind ~ " cannot be empty" );
+    }
+    else
+    {
+        if( arg.value.length == 0 )
+            arg.throwWith( kind ~ " cannot be empty" );
+    }
+
+    return arg;
+}
+
+@system unittest
+{
+    import std.range : iota;
+    import std.algorithm : map;
+
+    string str = "1";
+    int[] arr = [ 1 ];
+    int[string] assoc = [ "one": 1 ];
+    auto some = iota( 0, 5, 1 );
+    auto none = iota( 0, 0, 0 );
+
+    ensure!str.isNotEmpty;
+    ensure!arr.isNotEmpty;
+    ensure!assoc.isNotEmpty;
+
+    str = "";
+    arr = [];
+    assoc = typeof( assoc ).init;
+
+    mustThrow!EnsureException( { ensure!str.isNotEmpty; } );
+    mustThrow!EnsureException( { ensure!arr.isNotEmpty; } );
+    mustThrow!EnsureException( { ensure!assoc.isNotEmpty; } );
+
+    ensure!(some).isNotEmpty;
+
+    mustThrow!EnsureException( { ensure!(none).isNotEmpty; } );
 }
 
 /++
@@ -243,6 +380,16 @@ Arg!S isNotWhitespace( S )( Arg!S arg ) if( isSomeString!S )
         arg.throwWith( "string cannot consist of only whitespace characters" );
 
     return arg;
+}
+
+@system unittest
+{
+    auto a = "123";
+    auto b = "   ";
+
+    ensure!a.isNotWhitespace;
+
+    mustThrow!EnsureException( { ensure!b.isNotWhitespace; } );
 }
 
 /++
@@ -269,7 +416,6 @@ Params:
 Examples:
 ---------
 const zero = 0;
-const five = 5;
 
 ensure!(zero).between!"[)"( 0, 5 ); // exception, lower bound is exclusive
 ---------
@@ -338,8 +484,20 @@ Arg!N between( string how = "()", N )( Arg!N arg, N lowerBound, N upperBound )
     return arg;
 }
 
+@system unittest
+{
+    auto lower = 0;
+    auto upper = 5;
+
+    ensure!(lower).between!"()"( lower, upper );
+    ensure!(upper).between!"()"( lower, upper );
+
+    mustThrow!EnsureException( { ensure!(lower).between!"[]"( lower, upper ); } );
+    mustThrow!EnsureException( { ensure!(upper).between!"[]"( lower, upper ); } );
+}
+
 // auto-generate some functions for common boolean operations.
-private static immutable ops = [
+private enum ops = [
     ">": [ "greaterThan", "gt" ],
     ">=": [ "greaterThanOrEqualTo", "gte" ],
 
